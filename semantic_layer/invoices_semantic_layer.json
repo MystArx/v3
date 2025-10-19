@@ -1,0 +1,64 @@
+{
+    "tables": [
+        {
+            "name": "invoice_info",
+            "description": "Core invoice transaction table. Contains expense amounts and links to warehouse locations. Use this table to calculate total expenses and spending patterns.",
+            "columns": [
+                {
+                    "name": "id",
+                    "description": "Unique invoice identifier (Primary Key). Auto-incrementing integer.",
+                    "semantic_type": "identifier"
+                },
+                {
+                    "name": "warehouse_id",
+                    "description": "Foreign key linking to warehouse_info.id. CRITICAL for geographical expense analysis and regional reporting.",
+                    "semantic_type": "foreign_key",
+                    "references": "warehouse_info.id"
+                },
+                {
+                    "name": "invoice_date",
+                    "description": "Date the invoice was generated. Use for time-series analysis and period-based expense reports.",
+                    "semantic_type": "date"
+                },
+                {
+                    "name": "total_amount",
+                    "description": "Final monetary amount including GST. THIS IS THE PRIMARY METRIC for all expense calculations and aggregations.",
+                    "semantic_type": "currency",
+                    "aggregations": [
+                        "SUM",
+                        "AVG",
+                        "MIN",
+                        "MAX"
+                    ]
+                }
+            ]
+        }
+    ],
+    "relationships": [
+        {
+            "description": "Links invoices to their warehouse location",
+            "type": "MANY_TO_ONE",
+            "from_table": "invoice_info",
+            "from_column": "warehouse_id",
+            "to_table": "warehouse_info",
+            "to_column": "id",
+            "join_condition": "invoice_info.warehouse_id = warehouse_info.id"
+        }
+    ],
+    "metadata": {
+        "generated_from": [
+            "invoice_info"
+        ],
+        "version": "1.0"
+    },
+    "business_rules": [
+        {
+            "rule": "geographical_filtering",
+            "description": "To filter by REGION or CITY, you must: 1. Query warehouse_info to get warehouse codes 2. Extract city names from warehouse_code (everything before last hyphen) 3. Map cities to regions using the region mapping system 4. Filter warehouse IDs based on the geographical criteria 5. Use filtered warehouse_ids in invoice_info query"
+        },
+        {
+            "rule": "expense_calculation",
+            "description": "Always use SUM(total_amount) from invoice_info for expense totals. The total_amount field already includes GST - do not apply additional tax calculations."
+        }
+    ]
+}
