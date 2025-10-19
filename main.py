@@ -1,30 +1,25 @@
 # main.py
 """
 Main entry point for the Geographical Expense Analysis System.
-Initializes the agent and runs test queries.
+Orchestrates the stateful two-agent workflow, manages chat history,
+and grounds the refiner agent with validated data.
 """
 import os
 import sys
 import logging
-from typing import Callable, Any
+from typing import Callable, Any, Dict, List
 
 # CRITICAL: Add project root to sys.path for module imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from langchain_community.llms import Ollama
-from langchain_core.exceptions import OutputParserException
-
-# Import the semantic layer generator
 from semantic_layer.generate_semantic_layer import generate_semantic_layer_file
-
-# Import the agent creation function
-from agents.hardcoded_agent import create_hardcoded_agent
+from agents.refiner_agent import create_refiner_agent
+from agents.hardcoded_agent import create_executor_agent
+from tools.data_validator import data_validator
 
 # Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 LLM_MODEL_NAME = os.getenv("OLLAMA_MODEL", "mistral:latest")
@@ -32,47 +27,33 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_TEMPERATURE = float(os.getenv("OLLAMA_TEMPERATURE", "0.1"))
 
 
-def run_agent_test(query: str, agent: Callable[[str], str]) -> None:
+def run_executor_agent(command: Dict[str, Any], agent: Callable[[Dict[str, Any]], str]) -> str:
     """
-    Invokes the agent with a query and displays results.
-    
-    Args:
-        query: User's natural language query
-        agent: The agent invocation function
+    Invokes the executor agent and returns the result string.
     """
     print(f"\n{'='*70}")
-    print(f"USER QUERY: {query}")
+    print(f"EXECUTING COMMAND: {command}")
     print('='*70)
     
     try:
-        # Invoke the agent
-        result = agent(query)
-        
+        result = agent(command)
         if result:
             print(f"\n{result}")
+            return result
         else:
-            print("\n❌ AGENT RESPONSE: Received an empty result.")
-            
-    except OutputParserException as e:
-        # LLM failed to produce structured output
-        logger.warning("LLM did not produce structured output")
-        print(f"\n⚠️  WARNING: The LLM output could not be parsed.")
-        print(f"   This is expected for out-of-scope queries.")
-        raw_output = getattr(e, 'llm_output', 'N/A')
-        print(f"   RAW LLM OUTPUT: {raw_output[:200]}...")
-        
+            error_msg = "\n❌ AGENT RESPONSE: Received an empty result."
+            print(error_msg)
+            return error_msg
     except Exception as e:
         logger.error(f"Agent execution failed: {e}", exc_info=True)
-        print(f"\n❌ CRITICAL ERROR during agent execution: {e}")
-        print("   Check database connection and configuration.")
+        error_msg = f"\n❌ CRITICAL ERROR during agent execution: {e}"
+        print(error_msg)
+        return error_msg
 
 
 def initialize_system() -> bool:
     """
     Performs initial system setup and validation.
-    
-    Returns:
-        True if initialization successful, False otherwise
     """
     print("\n" + "- "*25)
     print("  JARVIS V3")
@@ -89,9 +70,7 @@ def initialize_system() -> bool:
             return False
     except Exception as e:
         logger.error(f"Semantic layer generation failed: {e}", exc_info=True)
-        print(f"\n❌ FATAL ERROR: Semantic Layer Generation Failed")
-        print(f"   Details: {e}")
-        print(f"   Check database credentials in config/mariadb_config.py")
+        print(f"\n❌ FATAL ERROR: Semantic Layer Generation Failed: {e}")
         return False
     
     # Step 2: Verify Ollama connection
@@ -102,104 +81,106 @@ def initialize_system() -> bool:
             base_url=OLLAMA_BASE_URL,
             temperature=OLLAMA_TEMPERATURE
         )
-        # Quick test
         test_llm.invoke("test")
         print(f"✅ Connected to Ollama (model: {LLM_MODEL_NAME})")
     except Exception as e:
         logger.error(f"Ollama connection failed: {e}", exc_info=True)
-        print(f"\n❌ FATAL ERROR: Could not connect to Ollama")
-        print(f"   Details: {e}")
-        print(f"\nPlease ensure:")
-        print(f"   1. Ollama is running: Check {OLLAMA_BASE_URL}")
-        print(f"   2. Model is downloaded: ollama pull {LLM_MODEL_NAME}")
-        print(f"   3. Model name is correct: {LLM_MODEL_NAME}")
+        print(f"\n❌ FATAL ERROR: Could not connect to Ollama: {e}")
+        return False
+        
+    # Step 3: Initialize Data Validator
+    print("\nSTEP 3: Initializing Data Validator...")
+    try:
+        data_validator.initialize()
+        print("✅ Data Validator initialized successfully.")
+    except Exception as e:
+        logger.error(f"Data Validator initialization failed: {e}", exc_info=True)
+        print(f"\n❌ FATAL ERROR: Could not initialize Data Validator: {e}")
         return False
     
     return True
 
 
 def main():
-    """Main execution function"""
+    """Main execution function with chat history management."""
     
-    # Initialize system
     if not initialize_system():
         print("\n❌ System initialization failed. Exiting.")
         sys.exit(1)
     
-    # Create LLM client
-    print(f"\nSTEP 3: Initializing Agent...")
+    print(f"\nSTEP 4: Initializing Agents...")
     try:
-        llm_client = Ollama(
-            model=LLM_MODEL_NAME,
-            base_url=OLLAMA_BASE_URL,
-            temperature=OLLAMA_TEMPERATURE
-        )
-        logger.info(f"LLM client initialized: {LLM_MODEL_NAME}")
+        llm_client = Ollama(model=LLM_MODEL_NAME, base_url=OLLAMA_BASE_URL, temperature=OLLAMA_TEMPERATURE)
+        refiner_agent = create_refiner_agent(llm_client=llm_client)
+        executor_agent = create_executor_agent()
+        print(f"✅ Agents initialized successfully")
     except Exception as e:
-        logger.error(f"Failed to create LLM client: {e}")
-        print(f"\n❌ FATAL ERROR: Could not create LLM client: {e}")
+        logger.error(f"Failed to create agents: {e}", exc_info=True)
         sys.exit(1)
     
-    # Create agent
-    try:
-        hardcoded_agent = create_hardcoded_agent(llm_client=llm_client)
-        print(f"✅ Agent initialized successfully")
-    except Exception as e:
-        logger.error(f"Failed to create agent: {e}", exc_info=True)
-        print(f"\n❌ FATAL ERROR: Could not create agent: {e}")
-        sys.exit(1)
-    
-    # Interactive mode
     print("\n" + "="*70)
-    print("  INTERACTIVE QUERY MODE")
+    print("  INTERACTIVE QUERY MODE (Grounded with Memory)")
     print("="*70)
-    print("\nYou can now ask questions about geographical expenses.")
-    print("\nExample queries:")
-    print("  • What are the total expenses for WEST region?")
-    print("  • Give me the total spend for warehouses in GURUGRAM")
-    print("  • Calculate expenses for warehouse SURAT-2")
-    print("  • Show me expenses for NORTH region")
-    print("\nType 'quit', 'exit', or 'q' to stop.")
-    print("Type 'test' to run automated test suite.")
+    print("\nYou can now have a conversation about geographical expenses.")
+    print("Type 'quit' or 'exit' to stop.")
     print("="*70 + "\n")
     
-    query_count = 0
+    chat_history: List[Dict[str, str]] = []
     
+    # Get valid values once to pass to the agent
+    valid_regions = data_validator.get_valid_regions()
+    valid_cities = data_validator.get_valid_cities()
+    valid_warehouses = data_validator.get_valid_warehouses()
+
     while True:
         try:
-            # Get user input
-            user_query = input("\n💬 Enter your query: ").strip()
-            
-            # Check for exit commands
-            if user_query.lower() in ['quit', 'exit', 'q', '']:
+            user_query = input("\n💬 User: ").strip()
+            if user_query.lower() in ['quit', 'exit', 'q', '', 'bye']:
                 print("\n👋 Goodbye!")
                 break
+
+            # Step 1: Call the Refiner Agent with the current query, history, and validated data
+            refinement_result = refiner_agent(
+                user_query, 
+                chat_history,
+                valid_regions,
+                valid_cities,
+                valid_warehouses
+            )
+            status = refinement_result.get("status")
+
+            # Step 2: Act based on the refinement status
+            if status == "SUCCESS":
+                command = refinement_result.get("command")
+                final_result = run_executor_agent(command, executor_agent)
+                chat_history.append({"role": "user", "content": user_query})
+                chat_history.append({"role": "assistant", "content": final_result})
             
-            # Check for test command
-            if user_query.lower() == 'test':
-                run_test_suite(hardcoded_agent)
-                continue
+            elif status == "CLARIFICATION_NEEDED":
+                clarification = refinement_result.get("clarification_question")
+                print(f"\n🤔 Assistant: {clarification}")
+                chat_history.append({"role": "user", "content": user_query})
+                chat_history.append({"role": "assistant", "content": clarification})
             
-            # Process the query
-            query_count += 1
-            print(f"\n[QUERY #{query_count}]")
-            run_agent_test(user_query, hardcoded_agent)
+            elif status == "OUT_OF_SCOPE":
+                response = "\n⚠️  INFO: This query is out of scope. I can only answer questions about expenses."
+                print(response)
+                chat_history.append({"role": "user", "content": user_query})
+                chat_history.append({"role": "assistant", "content": response})
             
+            else:
+                error_msg = refinement_result.get("error_message", "An unknown error occurred.")
+                print(f"\n❌ ERROR: {error_msg}")
+
         except KeyboardInterrupt:
-            print("\n\n⚠️  Interrupted. Type 'quit' to exit or continue querying.")
+            print("\n\n⚠️  Interrupted. Type 'quit' to exit.")
             continue
         except EOFError:
             print("\n\n👋 Goodbye!")
             break
-    
-    # Summary
-    if query_count > 0:
-        print("\n" + "="*70)
-        print(f"  SESSION SUMMARY: {query_count} queries processed")
-        print("="*70)
-
 
 if __name__ == "__main__":
+    
     try:
         main()
     except KeyboardInterrupt:
