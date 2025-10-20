@@ -165,8 +165,9 @@ def llm_generate_descriptions(raw_schema: Dict[str, List[Dict]]) -> Dict:
         semantic_layer['tables'].append({
             "name": "warehouse_info",
             "description": (
-                "Warehouse location master data. Maps warehouse IDs to geographical "
-                "locations via warehouse codes. Essential for region/city-based filtering."
+                "Warehouse location master data. Contains all geographical and contact "
+                "details for each warehouse. This is the primary source for address, "
+                "pincode, and location-based queries."
             ),
             "columns": [
                 {
@@ -177,33 +178,44 @@ def llm_generate_descriptions(raw_schema: Dict[str, List[Dict]]) -> Dict:
                 {
                     "name": "warehouse_code",
                     "description": (
-                        "Standardized location code in format: CITY-NUMBER (e.g., 'DELHI-1', "
-                        "'CHARKHI DADRI-65'). The city prefix MUST be extracted for regional "
-                        "classification. This is the KEY field for geographical analysis."
+                        "Standardized location code (e.g., 'DELHI-1'). This is the KEY field "
+                        "for geographical analysis and linking data."
                     ),
                     "semantic_type": "location_code",
                     "format": "CITY-NUMBER"
                 },
                 {
                     "name": "warehouse_name",
-                    "description": "Human-readable warehouse name for display purposes.",
+                    "description": "Human-readable warehouse name.",
                     "semantic_type": "text"
                 },
+                {
+                    "name": "address_1",
+                    "description": "The primary street address of the warehouse.",
+                    "semantic_type": "address"
+                },
+                {
+                    "name": "address_2",
+                    "description": "An additional line for the warehouse address.",
+                    "semantic_type": "address"
+                },
+                 {
+                    "name": "landmark",
+                    "description": "A nearby landmark to help locate the warehouse.",
+                    "semantic_type": "location_description"
+                },
+                {
+                    "name": "pin_code",
+                    "description": "The postal code for the warehouse's location.",
+                    "semantic_type": "postal_code"
+                },
+                {
+                    "name": "google_map_link",
+                    "description": "A URL pointing to the warehouse's location on Google Maps.",
+                    "semantic_type": "url"
+                }
             ]
         })
-
-    # Relationships
-    semantic_layer['relationships'].extend([
-        {
-            "description": "Links invoices to their warehouse location",
-            "type": "MANY_TO_ONE",
-            "from_table": "invoice_info",
-            "from_column": "warehouse_id",
-            "to_table": "warehouse_info",
-            "to_column": "id",
-            "join_condition": "invoice_info.warehouse_id = warehouse_info.id"
-        },
-    ])
     
     # Add business rules
     semantic_layer['business_rules'] = [

@@ -70,13 +70,12 @@ def sql_executor(
         # Format output as parsable string
         formatted_results = f"Columns: {columns}\nRows:\n"
         
+        # --- CORRECTED LOOP ---
+        # The old "if db_target == 'WAREHOUSE'" logic was truncating results.
+        # This new loop correctly formats the entire row for all queries.
         for row in results:
-            if db_target == "WAREHOUSE" and len(row) >= 2:
-                # Format: ('ID', 'CODE') for consistent parsing
-                formatted_results += f"('{str(row[0]).strip()}', '{str(row[1]).strip()}')\n"
-            else:
-                # For INVOICES or other queries
-                formatted_results += str(row) + "\n"
+            formatted_results += str(row) + "\n"
+        # --- END CORRECTION ---
         
         logger.info(f"Query executed successfully on {db_target}: {len(results)} rows returned")
         return formatted_results

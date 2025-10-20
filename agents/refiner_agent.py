@@ -13,70 +13,80 @@ from difflib import get_close_matches
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-REFINER_PROMPT_TEMPLATE = """You are an expert Query Refinement specialist for a warehouse expense analysis system.
+REFINER_PROMPT_TEMPLATE = """You are an expert Query Refinement specialist for a warehouse analysis system.
 
 **YOUR TASK**: Convert user queries into valid JSON commands. Follow these rules STRICTLY:
 
 **CRITICAL OUTPUT FORMAT RULES:**
-1. Output ONLY valid JSON - NO comments, NO explanations outside JSON
-2. NEVER use // or /* */ comments in JSON
-3. If uncertain about a value, use "CLARIFICATION_NEEDED" status instead of adding comments
+1. Output ONLY valid JSON - NO comments, NO explanations outside JSON.
+2. If uncertain, use "CLARIFICATION_NEEDED" status.
 
-**JSON Structure (strict):**
+---
+
+### **TOOL SELECTION LOGIC**
+- **Default to `calculate_expenses`** for any query about totals, costs, or spending.
+- Use **`list_warehouses_by_location`** if the user asks to "list", "show", or "find" warehouses in a CITY or REGION.
+- Use **`get_warehouse_details`** if the user asks for "address", "pincode", "location", or "details" of a specific warehouse.
+- Use **`find_warehouse_by_address`** ONLY if the user's query contains specific street names or landmarks.
+
+---
+
+### **JSON STRUCTURE (Strict and Unified for all tools)**
 {{
   "status": "SUCCESS" | "CLARIFICATION_NEEDED" | "OUT_OF_SCOPE",
   "command": {{
-    "tool_name": "calculate_expenses",
-    "filter_type": "REGION" | "CITY" | "WAREHOUSE",
+    "tool_name": "calculate_expenses" | "list_warehouses_by_location" | "get_warehouse_details" | "find_warehouse_by_address",
+    "filter_type": "REGION" | "CITY" | "WAREHOUSE" | "WAREHOUSE_IDENTIFIER" | "ADDRESS_KEYWORD",
     "filter_values": ["VALUE_1", "VALUE_2"]
   }},
   "clarification_question": "Ask user for missing info"
 }}
 
-**GROUNDING DATA - Use ONLY these exact values:**
+---
+
+### **GROUNDING DATA - Use ONLY these exact values:**
 Valid Regions: NORTH,SOUTH,EAST,WEST
 Valid Cities: {valid_cities}
 Sample Warehouses: {valid_warehouses_sample}
 
-**WAREHOUSE CODE MATCHING RULES:**
-1. If user provides code like "GREATER NOIDA-62" or "jaipur-58":
-   - Extract: "GREATER NOIDA-62" (exact match)
-   - Set filter_type: "WAREHOUSE"
-   - Set filter_values: ["GREATER NOIDA-62"]
-   
-2. If user says "warehouse in CITY" or "CITY warehouse":
-   - Ask them to specify warehouse code from that city
-   
-3. If user provides partial codes like "62 warehouse":
-   - Ask for full code: "Could you provide the complete warehouse code? (e.g., GREATER NOIDA-62)"
+---
 
-**FUZZY MATCHING:**
-- "ggn" → Ask: "Did you mean GURGAON or GURUGRAM?"
-- "kohlapur" → Suggest: "KOLHAPUR" (note spelling)
+### **CHAT HISTORY RESOLUTION (CRITICAL):**
+- **Most Important Rule:** If the last assistant message was a suggestion starting with "💡 Did you mean:", and the user replies with an affirmation ("yes", "correct", "that's the one"), you MUST create a SUCCESS command using the first warehouse code from the suggestion.
+- **If your last question confirmed a CITY** (e.g., "I found 'SHRI GANGA NAGAR'... Is this what you meant?"), and the user says "yes", the tool should be `list_warehouses_by_location` for that CITY.
+- **If the user says "both"** after you suggest multiple cities, include both in the `filter_values`.
+- **If the last suggestion was a list of warehouse codes for a city** (e.g., "...Did you mean: KOLKATA-74, KOLKATA-73?"), and the user replies with just a number (e.g., "75"), you MUST infer the full warehouse code by combining the city from the previous context with the new number (e.g., "KOLKATA-75").
 
-**CHAT HISTORY RESOLUTION:**
-- If user says "both", "all", "yes" after your clarification → Include all mentioned options
-- If user says "first one", "that one" → Use the first option you suggested
+---
 
-**EXAMPLES:**
+### **EXAMPLES**
 
-Example 1 - Direct warehouse code:
+**-- Expense Calculation --**
 User: "expense of greater noida-62"
 Output: {{"status": "SUCCESS", "command": {{"tool_name": "calculate_expenses", "filter_type": "WAREHOUSE", "filter_values": ["GREATER NOIDA-62"]}}, "clarification_question": null}}
 
-Example 2 - Ambiguous city:
-User: "expenses in gurgaon"  
-Output: {{"status": "CLARIFICATION_NEEDED", "command": null, "clarification_question": "I found both 'GURGAON' and 'GURUGRAM' in the database. Which would you like, or should I calculate for both?"}}
+**-- Warehouse Listing & Details --**
+User: "show me all warehouses in the NORTH region"
+Output: {{"status": "SUCCESS", "command": {{"tool_name": "list_warehouses_by_location", "filter_type": "REGION", "filter_values": ["NORTH"]}}, "clarification_question": null}}
 
-Example 3 - Follow-up response:
-History: Assistant asked about GURGAON vs GURUGRAM
-User: "both"
-Output: {{"status": "SUCCESS", "command": {{"tool_name": "calculate_expenses", "filter_type": "CITY", "filter_values": ["GURGAON", "GURUGRAM"]}}, "clarification_question": null}}
+User: "what is the address for GURGAON-9"
+Output: {{"status": "SUCCESS", "command": {{"tool_name": "get_warehouse_details", "filter_type": "WAREHOUSE_IDENTIFIER", "filter_values": ["GURGAON-9"]}}, "clarification_question": null}}
 
-Example 4 - Misspelling:
-User: "kohlapur expenses"
-Output: {{"status": "CLARIFICATION_NEEDED", "command": null, "clarification_question": "Did you mean 'KOLHAPUR'? (Note: 'Kohlapur' is not in our database)"}}
+User: "find a warehouse on udyog vihar"
+Output: {{"status": "SUCCESS", "command": {{"tool_name": "find_warehouse_by_address", "filter_type": "ADDRESS_KEYWORD", "filter_values": ["udyog vihar"]}}, "clarification_question": null}}
 
+**-- Critical History Example --**
+History: Assistant: "⚠️ Invalid WAREHOUSE values: ['SONIPAT']\\n   💡 Did you mean: SONIPAT-4?"
+User: "yes"
+Output: {{"status": "SUCCESS", "command": {{"tool_name": "get_warehouse_details", "filter_type": "WAREHOUSE_IDENTIFIER", "filter_values": ["SONIPAT-4"]}}, "clarification_question": null}}
+
+**-- Critical History Example 2 (Numerical Follow-up) --**
+History: Assistant: "⚠️ Invalid WAREHOUSE values: ['KOLKATA']\\n   💡 Did you mean: KOLKATA-74, KOLKATA-73, KOLKATA-13?"
+User: "75"
+Output: {{"status": "SUCCESS", "command": {{"tool_name": "get_warehouse_details", "filter_type": "WAREHOUSE_IDENTIFIER", "filter_values": ["KOLKATA-75"]}}, "clarification_question": null}}
+---
+
+### **CURRENT CONVERSATION**
 **CHAT HISTORY:**
 {chat_history}
 
@@ -105,32 +115,33 @@ def fuzzy_match_city(user_input: str, valid_cities: List[str], threshold: float 
 
 def extract_warehouse_code_from_query(query: str, valid_warehouses: List[str]) -> str | None:
     """
-    Attempts to extract a valid warehouse code from the user query.
-    
-    Args:
-        query: User's input query
-        valid_warehouses: List of valid warehouse codes
-    
-    Returns:
-        Matched warehouse code or None
+    Attempts to extract a valid warehouse code from the user query,
+    handling both space and hyphen separators.
     """
     query_upper = query.upper().strip()
-    
-    # Direct exact match
+
+    # Create a potential code from the query by replacing the last space with a hyphen
+    # This handles "CHENNAI 16" -> "CHENNAI-16"
+    if ' ' in query_upper and query_upper.split(' ')[-1].isdigit():
+        parts = query_upper.rsplit(' ', 1)
+        potential_code_from_space = f"{parts[0]}-{parts[1]}"
+        if potential_code_from_space in valid_warehouses:
+            return potential_code_from_space
+
+    # Direct exact match (handles "CHENNAI-16")
     for warehouse in valid_warehouses:
         if warehouse in query_upper:
             return warehouse
-    
-    # Pattern match: CITY-NUMBER
+
+    # Original pattern match for safety
     pattern = r'([A-Z\s]+)-(\d+)'
     match = re.search(pattern, query_upper)
     if match:
         potential_code = f"{match.group(1).strip()}-{match.group(2)}"
         if potential_code in valid_warehouses:
             return potential_code
-    
+            
     return None
-
 
 def clean_json_response(response: str) -> str:
     """
