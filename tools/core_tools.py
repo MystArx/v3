@@ -100,7 +100,7 @@ def extract_city_from_warehouse_code(warehouse_code: str) -> str:
     """
     Extracts the city name from a standardized warehouse code.
     
-    Format: CITY-NUMBER (e.g., 'DELHI-1', 'CHARKHI DADRI-65')
+    Format: CITY-NUMBER (e.g., 'DELHI 1', 'CHARKHI DADRI 1')
     
     Args:
         warehouse_code: The warehouse code string
@@ -109,9 +109,9 @@ def extract_city_from_warehouse_code(warehouse_code: str) -> str:
         Extracted city name in uppercase
         
     Examples:
-        >>> extract_city_from_warehouse_code('DELHI-1')
+        >>> extract_city_from_warehouse_code('DELHI 1')
         'DELHI'
-        >>> extract_city_from_warehouse_code('CHARKHI DADRI-65')
+        >>> extract_city_from_warehouse_code('CHARKHI DADRI 2')
         'CHARKHI DADRI'
     """
     warehouse_code = warehouse_code.strip()
