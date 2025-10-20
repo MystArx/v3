@@ -44,8 +44,7 @@ Sample Warehouses: {valid_warehouses_sample}
    - Set filter_type: "WAREHOUSE"
    - Set filter_values: ["GREATER NOIDA-62"]
    
-2. If user says "warehouse in CITY" or "CITY warehouse":
-   - Ask them to specify warehouse code from that city
+2. If a user provides a valid city name (e.g., "expenses in Chennai"), create a command with `filter_type: "CITY"`. Do NOT ask for a warehouse code unless the user's query contains the word "warehouse".
    
 3. If user provides partial codes like "62 warehouse":
    - Ask for full code: "Could you provide the complete warehouse code? (e.g., GREATER NOIDA-62)"
@@ -54,9 +53,16 @@ Sample Warehouses: {valid_warehouses_sample}
 - "ggn" → Ask: "Did you mean GURGAON or GURUGRAM?"
 - "kohlapur" → Suggest: "KOLHAPUR" (note spelling)
 
-**CHAT HISTORY RESOLUTION:**
-- If user says "both", "all", "yes" after your clarification → Include all mentioned options
-- If user says "first one", "that one" → Use the first option you suggested
+**CHAT HISTORY RESOLUTION (CRITICAL):**
+- Your primary goal is to resolve the user's intent. Use the history to understand the context of their replies.
+- **If your last question was to confirm a CITY** (e.g., "I found 'SHRI GANGA NAGAR' in the database. Is this what you meant?"), and the user replies with an affirmation ("yes", "correct"), you MUST create a SUCCESS command with `filter_type: "CITY"` and the suggested city name.
+- **If your last question was to clarify between multiple options** (e.g., "GURGAON or GURUGRAM"), and the user says "both", include both in the `filter_values`. If they say "yes" or "the first one", use the first option.
+- **If the system (not you) suggested a specific WAREHOUSE CODE** and the user says "yes", you should treat that as a confirmation for the WAREHOUSE.
+
+**Example 5 - Affirmative Follow-up:**
+History: Assistant asked "Did you mean: SHRI GANGA NAGAR-52?"
+User: "yes"
+Output: {{"status": "SUCCESS", "command": {{"tool_name": "calculate_expenses", "filter_type": "WAREHOUSE", "filter_values": ["SHRI GANGA NAGAR-52"]}}, "clarification_question": null}}
 
 **EXAMPLES:**
 
@@ -76,6 +82,11 @@ Output: {{"status": "SUCCESS", "command": {{"tool_name": "calculate_expenses", "
 Example 4 - Misspelling:
 User: "kohlapur expenses"
 Output: {{"status": "CLARIFICATION_NEEDED", "command": null, "clarification_question": "Did you mean 'KOLHAPUR'? (Note: 'Kohlapur' is not in our database)"}}
+
+Example 5 - City Confirmation:
+History: Assistant: "I found 'SHRI GANGA NAGAR' in the database. Is this what you meant?"
+User: "yes"
+Output: {{"status": "SUCCESS", "command": {{"tool_name": "calculate_expenses", "filter_type": "CITY", "filter_values": ["SHRI GANGA NAGAR"]}}, "clarification_question": null}}
 
 **CHAT HISTORY:**
 {chat_history}
@@ -105,32 +116,33 @@ def fuzzy_match_city(user_input: str, valid_cities: List[str], threshold: float 
 
 def extract_warehouse_code_from_query(query: str, valid_warehouses: List[str]) -> str | None:
     """
-    Attempts to extract a valid warehouse code from the user query.
-    
-    Args:
-        query: User's input query
-        valid_warehouses: List of valid warehouse codes
-    
-    Returns:
-        Matched warehouse code or None
+    Attempts to extract a valid warehouse code from the user query,
+    handling both space and hyphen separators.
     """
     query_upper = query.upper().strip()
-    
-    # Direct exact match
+
+    # Create a potential code from the query by replacing the last space with a hyphen
+    # This handles "CHENNAI 16" -> "CHENNAI-16"
+    if ' ' in query_upper and query_upper.split(' ')[-1].isdigit():
+        parts = query_upper.rsplit(' ', 1)
+        potential_code_from_space = f"{parts[0]}-{parts[1]}"
+        if potential_code_from_space in valid_warehouses:
+            return potential_code_from_space
+
+    # Direct exact match (handles "CHENNAI-16")
     for warehouse in valid_warehouses:
         if warehouse in query_upper:
             return warehouse
-    
-    # Pattern match: CITY-NUMBER
+
+    # Original pattern match for safety
     pattern = r'([A-Z\s]+)-(\d+)'
     match = re.search(pattern, query_upper)
     if match:
         potential_code = f"{match.group(1).strip()}-{match.group(2)}"
         if potential_code in valid_warehouses:
             return potential_code
-    
+            
     return None
-
 
 def clean_json_response(response: str) -> str:
     """
